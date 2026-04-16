@@ -1,5 +1,5 @@
-## Trabalho SpeeDup
-# Na pasta - 
+# Trabalho SpeeDup
+## Na pasta - 
 Trabalho_Speedup_Windows Tendo os resultados no arquivo csv da máquina Windows
-# E na pasta-
+## E na pasta-
 Trabalho_Speedup_Linux Tendo os resultados no arquivo csv da máquina Linux 
