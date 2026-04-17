@@ -1,4 +1,5 @@
 # Trabalho SpeeDup
+Grupo- Wesley, Otávio, João Carlos e Whendell
 ## Na pasta - 
 Trabalho_Speedup_Windows Tendo os resultados no arquivo csv da máquina Windows
 ## E na pasta-
