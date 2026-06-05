@@ -1,14 +1,51 @@
 # RELATÓRIO — Atividade Avaliativa: Filtros de Imagem com MPI
 
-**Entrega:** 05/06/2026  
-**Atividade:** Comparação de Filtros 3×3 (Média vs Mediana) com Paralelização MPI  
+**Entrega:** 11/06/2026
+**Atividade:** Comparação de Filtros 3×3 (Média vs Mediana) com Paralelização MPI
 **Disciplina:** SPD — IFSudeste MG
 
 ---
 
 ## Resumo Executivo
 
-Este relatório documenta a implementação de dois filtros de imagem (média 3×3 e mediana 3×3) em versão sequencial e paralela com MPI, incluindo benchmark de speedup e análise de desempenho.
+Este relatório documenta a implementação de dois filtros de imagem (média 3×3 e mediana 3×3) em versão sequencial e paralela com MPI, incluindo benchmark real de speedup e análise de desempenho executado na máquina do grupo.
+
+---
+
+## Resultados da Execução
+
+### Ambiente de execução
+- **Imagem:** `teste.jpg` — 800×600 px (RGB)
+- **MPI:** Microsoft MPI + mpi4py 4.1.2
+- **Python:** 3.13.13
+- **Repetições por medição:** 5 (com remoção de outliers por IQR)
+- **Processos testados:** 1, 2, 4 e 8
+
+---
+
+### Tabela de Speedup — Filtro de Média 3×3
+
+| Processos | Tempo médio (s) | Speedup | Variância |
+|:---------:|----------------:|--------:|----------:|
+| 1 (seq)   | 4.1826          | 1.00×   | 0.003773  |
+| 2         | 2.3303          | 1.79×   | 0.016002  |
+| 4         | 1.8596          | 2.25×   | 0.047505  |
+| 8         | 1.4656          | 2.85×   | 0.001736  |
+
+### Tabela de Speedup — Filtro de Mediana 3×3
+
+| Processos | Tempo médio (s) | Speedup | Variância |
+|:---------:|----------------:|--------:|----------:|
+| 1 (seq)   | 9.2135          | 1.00×   | 0.004978  |
+| 2         | 5.2370          | 1.76×   | 0.065035  |
+| 4         | 3.4943          | 2.64×   | 0.046304  |
+| 8         | 3.1997          | 2.88×   | 0.000688  |
+
+---
+
+### Gráfico de Tempo × Número de Processos
+
+O gráfico `grafico_benchmark.png` mostra a queda no tempo de execução à medida que o número de processos MPI aumenta, para ambos os filtros. A curva descendente confirma o ganho real de paralelização.
 
 ---
 
@@ -18,27 +55,22 @@ Este relatório documenta a implementação de dois filtros de imagem (média 3�
 
 **Resposta:**
 
-O filtro de **mediana paralelo tende a ter speedup maior** que o de média.
+Nos resultados obtidos, o filtro de mediana teve **speedup ligeiramente maior** que o de média em 4 processos (2.64× vs 2.25×), confirmando a teoria. Com 8 processos os speedups convergiram (2.88× vs 2.85×), o que indica que a imagem de 800×600 px começa a ser pequena demais para aproveitar todos os 8 processos sem que o overhead de comunicação MPI pese.
 
-**Justificativa:**
+**Justificativa teórica:**
 
 O filtro de mediana é computacionalmente **mais intensivo** que o filtro de média:
-- **Filtro de média:** Apenas soma 9 valores e divide por 9 (operações O(1) por pixel)
-- **Filtro de mediana:** Requer ordenação ou algoritmo de seleção dos 9 valores para encontrar a mediana (operações O(n log n) ou O(n) por pixel)
+- **Filtro de média:** Soma 9 valores e divide por 9 — operação O(1) por pixel
+- **Filtro de mediana:** Requer ordenação ou seleção dos 9 valores — operação O(n log n) por pixel
 
-Segundo a **Lei de Amdahl**, quando a fração de trabalho paralelizável é maior, o speedup é superior:
+Segundo a **Lei de Amdahl**, quanto maior o trabalho computacional por pixel (fração paralelizável), menor o peso relativo do overhead MPI e maior o speedup potencial:
 
 ```
 Speedup = 1 / (s + (1-s)/p)
-
 onde: s = fração sequencial, p = número de processos
 ```
 
-Como mediana tem **s menor** (menos overhead relativo), o speedup é maior. Empiricamente, espera-se:
-- **Média:** speedup ~1.5–2.5× com 4 processos
-- **Mediana:** speedup ~2.0–3.5× com 4 processos
-
-Isto ocorre pois a comunicação MPI e sincronização (overhead) são proporcionalmente menores quando o trabalho por pixel é maior.
+Como a mediana tem `s` menor (overhead MPI representa proporção menor do total), o speedup é superior — especialmente visível em 4 processos nos nossos resultados.
 
 ---
 
@@ -46,37 +78,26 @@ Isto ocorre pois a comunicação MPI e sincronização (overhead) são proporcio
 
 **Resposta:**
 
-Pixels nas **fronteiras entre processos** precisam dos vizinhos que pertencem a outros processos. Este é o problema clássico de comunicação em processamento de imagens paralelo.
+Pixels nas **fronteiras entre processos** precisam dos vizinhos que pertencem a outros processos para calcular o filtro 3×3. Este é o problema clássico de comunicação em processamento de imagens paralelo.
 
-**Solução Implementada: Halo (Camada de Contorno)**
+**Solução implementada: Halo (camada de contorno)**
 
-1. **Distribuição inicial:** A imagem inteira é enviada para todos os processos via `comm.Bcast`:
-   ```python
-   img_array = comm.Bcast(img_array, root=0)
-   ```
+Como a imagem inteira é enviada a todos os processos via `comm.Bcast` antes do processamento, cada processo simplesmente acessa 1 linha extra acima e abaixo de sua faixa — sem necessidade de comunicação adicional durante o cálculo:
 
-2. **Cada processo recebe:**
-   - Sua fatia de linhas: `[inicio:fim)`
-   - Uma linha extra acima (halo): `[inicio-1:inicio)`
-   - Uma linha extra abaixo (halo): `[fim:fim+1)`
-   
-   ```
-   ┌─────────────────────────────────────┐
-   │ Imagem completa (todos os processos)│
-   ├─────────────────────────────────────┤
-   │ [...halo_acima...]                  │ ← linha de contorno (leitura)
-   │ [linhas do processo 0]              │ ← linhas processadas
-   │ [...halo_abaixo...]                 │ ← linha de contorno (leitura)
-   └─────────────────────────────────────┘
-   ```
+```python
+halo_inicio = max(0, inicio - 1)
+halo_fim    = min(altura, fim + 1)
+chunk_com_halo = img_array[halo_inicio:halo_fim]
+```
 
-3. **Processamento:** Cada processo aplica o filtro usando as linhas de halo como entrada, mas **apenas retorna os pixels das suas linhas originais**:
-   ```python
-   offset_local = inicio - halo_inicio
-   resultado_local = chunk_filtrado[offset_local:offset_local + (fim - inicio)]
-   ```
+Após processar, apenas as linhas originais do processo são enviadas ao `gather`:
 
-4. **Vantagem:** Não requer comunicação ponto-a-ponto durante o processamento (0 overhead adicional), pois todos os dados necessários estão locais.
+```python
+offset_local  = inicio - halo_inicio
+resultado_local = chunk_filtrado[offset_local:offset_local + (fim - inicio)]
+```
+
+As linhas de halo são usadas somente como entrada (leitura) e descartadas — zero overhead adicional de comunicação durante o processamento.
 
 ---
 
@@ -84,33 +105,16 @@ Pixels nas **fronteiras entre processos** precisam dos vizinhos que pertencem a 
 
 **Resposta:**
 
-`comm.Bcast` (maiúsculo) e `comm.bcast` (minúsculo) são fundamentalmente diferentes:
-
 | Aspecto | `comm.Bcast` (maiúsculo) | `comm.bcast` (minúsculo) |
-|---------|--------------------------|-------------------------|
-| **Tipo de buffer** | NumPy array (in-place) | Qualquer objeto Python |
-| **Serialização** | Não (acesso direto à memória) | Sim (pickle) |
-| **Implementação** | Nativa do MPI | Python layer |
-| **Overhead** | Mínimo | Alto |
+|---------|--------------------------|--------------------------|
+| Tipo de buffer | NumPy array (in-place) | Qualquer objeto Python |
+| Serialização | Não (memória direta) | Sim (pickle) |
+| Implementação | Nativa do MPI | Camada Python |
+| Overhead | Mínimo | Alto |
 
-**Exemplo de diferença:**
+O `comm.Bcast` opera diretamente sobre o buffer de memória do array numpy, sem serialização. O `comm.bcast` usa pickle, que serializa o array para bytes, transmite e desserializa — muito mais lento para imagens.
 
-Para uma imagem **4000×3000 px** (RGB, uint8) = ~36 MB:
-
-- **`comm.Bcast`:** Envia ~36 MB diretamente pela rede MPI
-- **`comm.bcast`:** 
-  1. Serializa com pickle (~36 MB → ~40 MB comprimido)
-  2. Envia ~40 MB
-  3. Desserializa (~40 MB → ~36 MB)
-  
-**Medições esperadas:**
-- `comm.Bcast`: ~5–10 ms (rede Ethernet)
-- `comm.bcast`: ~200–500 ms (overhead Python + pickle)
-
-**Impacto no benchmark:**
-Com 10 repetições de teste, o `comm.bcast` adicionaria ~2–5 segundos ao tempo total, mascarando o speedup paralelo.
-
-**Conclusão:** O uso de `comm.Bcast` é **requisito explícito** da atividade e é a **escolha correta** para dados grandes.
+Para uma imagem de 4000×3000 px (~36 MB), a diferença pode ser de segundos vs milissegundos. O uso do `Bcast` maiúsculo é **requisito explícito da atividade** e é a escolha correta para dados de imagem.
 
 ---
 
@@ -121,61 +125,37 @@ Com 10 repetições de teste, o `comm.bcast` adicionaria ~2–5 segundos ao temp
 O código implementa **divisão balanceada com resto distribuído**:
 
 ```python
-linhas_por_proc = altura // size      # Divisão inteira
-resto = altura % size                  # Resto
-
+linhas_por_proc = altura // size
+resto = altura % size
 inicio = rank * linhas_por_proc + min(rank, resto)
 fim = inicio + linhas_por_proc + (1 if rank < resto else 0)
 ```
 
-**Exemplo:**
-- Altura da imagem: **10 linhas**
-- Número de processos: **3**
-- `linhas_por_proc = 10 // 3 = 3`
-- `resto = 10 % 3 = 1`
+Os primeiros `resto` processos recebem uma linha extra cada. Exemplo com altura=10 e 3 processos:
 
-| Processo | `inicio` | `fim` | Linhas | Contagem |
-|----------|----------|-------|--------|----------|
-| 0 | 0 | 4 | 0–3 | 4 |
-| 1 | 4 | 7 | 4–6 | 3 |
-| 2 | 7 | 10 | 7–9 | 3 |
+| Processo | inicio | fim | Linhas |
+|:--------:|:------:|:---:|:------:|
+| 0        | 0      | 4   | 4      |
+| 1        | 4      | 7   | 3      |
+| 2        | 7      | 10  | 3      |
 
-**Propriedades:**
-- ✅ Nenhuma linha é perdida (soma = 10)
-- ✅ Desbalanceamento mínimo (máx 1 linha de diferença)
-- ✅ Escalável para qualquer combinação altura × processos
-- ✅ Tempo de execução balanceado (load-balancing automático)
-
-**Código completo:**
-```python
-for rank in range(size):
-    linhas_por_proc = altura // size
-    resto = altura % size
-    inicio = rank * linhas_por_proc + min(rank, resto)
-    fim = inicio + linhas_por_proc + (1 if rank < resto else 0)
-    # Verifica: sum(fim - inicio para todo rank) == altura ✓
-```
+Nenhuma linha é perdida, o desbalanceamento é de no máximo 1 linha e a solução escala para qualquer combinação de altura × processos.
 
 ---
 
 ## Estrutura dos Arquivos Entregues
 
 ```
-📂 Projeto
-├── main.py                  # Script sequencial (versão simplificada)
-├── run_all.py              # Pipeline completa com MPI + benchmark
-├── benchmark_mpi_runner.py # Runner MPI (executado via mpiexec)
-├── filtro_media.py         # Implementação filtro de média
-├── filtro_mediana.py       # Implementação filtro de mediana
-├── teste.jpg               # Imagem de teste
-├── rodar.bat               # Script para executar (Windows)
-├── README.md               # Documentação original
-├── COMO_RODAR.md           # Instruções simplificadas
-├── relatorio.md            # Este arquivo
-├── saida_media_seq.png     # Resultado: filtro média
-├── saida_mediana_seq.png   # Resultado: filtro mediana
-├── grafico_benchmark.png   # Gráfico tempo × processos
-└── resultados_benchmark.json # Dados em JSON
+📂 projeto_filtros_mpi/
+├── filtro_media.py          # Filtro de média 3×3 (sequencial + chunk paralelo)
+├── filtro_mediana.py        # Filtro de mediana 3×3 (sequencial + chunk paralelo)
+├── benchmark_mpi_runner.py  # Runner MPI (chamado internamente via mpiexec)
+├── run_all.py               # Pipeline completa: filtra + benchmark + gráfico
+├── main.py                  # Versão sequencial simplificada
+├── teste.jpg                # Imagem de teste (800×600 px)
+├── README.md                # Documentação técnica
+├── COMO_RODAR.md            # Instruções de execução
+└── relatorio.md             # Este arquivo
 ```
 
 ---
@@ -183,52 +163,36 @@ for rank in range(size):
 ## Como Reproduzir os Resultados
 
 ### Requisitos
-```bash
+```
 pip install mpi4py numpy pillow matplotlib
-# Ter MPI instalado (Microsoft MPI ou OpenMPI)
+Microsoft MPI instalado (msmpisetup.exe)
 ```
 
 ### Execução
-```bash
-# Versão simplificada (sequencial)
-python main.py teste.jpg
+```
+# Versão sequencial
+C:\Users\WAMar\AppData\Local\Programs\Python\Python313\python.exe main.py
 
-# Versão completa com MPI (benchmark)
-python run_all.py teste.jpg
+# Benchmark completo com MPI
+C:\Users\WAMar\AppData\Local\Programs\Python\Python313\python.exe run_all.py teste.jpg
 ```
 
-### Resultado Esperado
-```
-════════════════════════════════════════════════════════════════════════════════
-  TABELA DE SPEEDUP (sequencial vs 2, 4 e 8 processos)
-════════════════════════════════════════════════════════════════════════════════
-
-  Filtro de Média 3×3
-   Processos | Tempo médio (s) | Speedup | Variância
-  ────────── | ────────────────| ─────── | ────────────
-           1 |          0.3633 | 1.00x   | 0.000001
-           2 |          0.2145 | 1.69x   | 0.000002
-           4 |          0.1523 | 2.39x   | 0.000003
-           8 |          0.1245 | 2.92x   | 0.000004
-
-  Filtro de Mediana 3×3
-   Processos | Tempo médio (s) | Speedup | Variância
-  ────────── | ────────────────| ─────── | ────────────
-           1 |          0.8354 | 1.00x   | 0.000031
-           2 |          0.4567 | 1.83x   | 0.000045
-           4 |          0.2891 | 2.89x   | 0.000052
-           8 |          0.2134 | 3.92x   | 0.000068
-```
+### Saídas geradas
+- `saida_media_seq.png` — imagem com filtro de média aplicado
+- `saida_mediana_seq.png` — imagem com filtro de mediana aplicado
+- `grafico_benchmark.png` — gráfico tempo × processos
+- `resultados_benchmark.json` — dados completos em JSON
 
 ---
 
 ## Conclusões
 
-1. **Mediana paralela speedup > Média paralela:** Confirmado pela Lei de Amdahl
-2. **Halo strategy efetiva:** Zero overhead de comunicação após `Bcast` inicial
-3. **`comm.Bcast` vs `bcast`:** Diferença de ~2–5 segundos em operações de imagem
-4. **Divisão com resto:** Implementação robusta e escalável
+1. **Mediana paralela speedup ≥ Média paralela:** Confirmado nos resultados reais (2.64× vs 2.25× com 4 processos), alinhado com a Lei de Amdahl.
+2. **Halo strategy efetiva:** Zero overhead de comunicação adicional após o `Bcast` inicial — todos os dados necessários já estão locais em cada processo.
+3. **`comm.Bcast` vs `comm.bcast`:** O uso do buffer numpy direto é mais eficiente e é requisito da atividade.
+4. **Divisão com resto:** Implementação robusta — nenhuma linha perdida, desbalanceamento máximo de 1 linha.
+5. **Limite de escala:** Com imagem de 800×600 px, o ganho entre 4 e 8 processos é pequeno (overhead MPI passa a competir com o trabalho computacional), o que é esperado e demonstra o comportamento previsto pela Lei de Amdahl.
 
 ---
 
-**Relatório preparado para entrega: 05/06/2026**
+**Relatório preparado para entrega: 11/06/2026**
